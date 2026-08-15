@@ -106,17 +106,71 @@ vence la prueba (`TrialExpirationJob`, diario a las 03:00 Bogotá) y `ACTIVE` se
 activa manualmente. El punto de enganche del cobro es
 `SubscriptionService.expireFinishedTrials()`.
 
-### 1.3 Modelo objetivo (fases siguientes — **no** se crean tablas todavía)
+### 1.3 Fase 3 — clientes, expedientes y leads (migración `V5`)
+
+```
+┌──────────────┐        ┌────────────────────────┐       ┌──────────────┐
+│    client    │        │      legal_case        │       │    lawyer    │
+│──────────────│ 1    N │────────────────────────│ N   1 │  (Fase 1)    │
+│ client_type  ├───────►│ client_id              │◄──────┤              │
+│ document_*   │        │ assigned_lawyer_id     │       └──────────────┘
+│   (uq/firma) │        │ practice_area_id       │
+│ name         │        │ case_number (uq/firma) │──┐    ┌──────────────┐
+│ email, phone │        │ radicado (uq si existe)│  │    │practice_area │
+│ status       │        │ case_type   LITIGIO /  │  │    │  (Fase 1)    │
+└──────┬───────┘        │             ASESORIA   │  │    └──────────────┘
+       │                │ status, outcome        │  │
+       │                │ priority, court        │  │  ┌──────────────────────┐
+       │                │ opposing_party         │  └─►│ case_number_sequence │
+       │                │ claim_amount           │     │ (tenant_id, year) PK │
+       │                └───┬────────────────┬───┘     │ last_number          │
+       │                    │ 1              │ 1       └──────────────────────┘
+       │                    │ N              │ N
+       │            ┌───────┴──────┐  ┌──────┴─────────────┐
+       │            │  case_event  │  │   case_deadline    │
+       │            │──────────────│  │────────────────────│
+       │            │ event_type   │  │ deadline_type      │
+       │            │ title, descr │  │ due_date  (DATE)   │
+       │            │ occurred_at  │  │ notify_days_before │
+       │            │ created_by   │  │ status PENDING /   │
+       │            │ solo-append  │  │  COMPLETED/MISSED  │
+       │            └──────────────┘  └────────────────────┘
+       │ 0..1
+       │  ┌────────────────────────┐
+       └──┤          lead          │
+converted │────────────────────────│
+_client_id│ name, email, phone     │
+          │ source  MARKETPLACE /  │
+          │   CALCULADORA / ...    │
+          │ status  NEW→CONTACTED→ │
+          │  QUALIFIED→CONVERTED   │
+          │            ↘ LOST      │
+          └────────────────────────┘
+```
+
+| Decisión | Por qué |
+|---|---|
+| Paquete `legalcase`, clase `LegalCase`, tabla `legal_case` | `case` es palabra reservada **en Java y en SQL**: `package ...domain.case` no compila. El prompt pedía un dominio `case`; este es el nombre más cercano que el lenguaje permite. |
+| `case_number` lo asigna el sistema, con tabla de secuencia | `max(case_number) + 1` se pisa cuando dos personas crean un caso a la vez. El `INSERT … ON CONFLICT DO UPDATE … RETURNING` es atómico en Postgres: no hace falta bloquear nada. Formato `2026-0001`, reiniciado por año. |
+| `due_date` es `LocalDate`, no `Instant` | Los términos vencen "el 15 de marzo", no "el 15 de marzo a las 17:00 UTC". Guardarlos con hora invita a errores de zona horaria justo donde más caro sale. |
+| `case_event` solo se agrega | Es el historial de lo que pasó. Poder reescribirlo destruye su valor frente al cliente — y en la Fase 4 es exactamente lo que el cliente verá en su portal. |
+| Cerrar exige desenlace | Un caso "cerrado sin resultado" no informa nada. Lo respalda `ck_case_closed` en la BD, no solo el service. |
+| El job `MISSED` usa SQL nativo | Es tarea de plataforma: cruza todas las firmas. Una consulta JPQL sobre `CaseDeadline` la limitaría a un solo tenant por el filtro de Hibernate. |
+| El lead exige correo **o** teléfono | Sin ninguno de los dos no hay a quién contactar, y un lead incontactable ensucia el pipeline. |
+
+**Contra el N+1, dos patrones que se repiten en esta fase:** el listado de clientes
+trae `openCases` con una subconsulta correlacionada, y el de expedientes trae
+`nextDueDate` igual. Son las columnas que más se miran; resolverlas por fila
+serían N consultas extra en cada pantalla.
+
+### 1.4 Modelo objetivo (fases siguientes — **no** se crean tablas todavía)
 
 Se documenta para que las decisiones de hoy no bloqueen mañana. Cada tabla llega
 en la migración de su fase.
 
 ```
-Fase 3  client >── tenant                     CRM de clientes de la firma
-        legal_case >── client, lawyer         expediente ("case" es palabra reservada)
-        case_event >── legal_case             actuaciones y términos procesales
-        lead >── tenant                       pipeline de captación
-Fase 4  appointment >── legal_case            agenda
+Fase 4  client.user_id                        enlace del cliente con su acceso al portal
+        appointment >── legal_case            agenda
         message >── legal_case                mensajería con el cliente
 Fase 5  legal_parameter                       SMLV, auxilio de transporte, por año
 Fase 6  fee_agreement, time_entry, invoice, payment
@@ -180,11 +234,13 @@ com.mi.abogado
     │   ├── mapper/LawyerMapper.java                                 (MapStruct)
     │   ├── repository/ LawyerRepository, PracticeAreaRepository
     │   └── entity/     Lawyer, PracticeArea
-    ├── client/         ┐
-    ├── case/           │
-    ├── document/       │  fases siguientes,
-    ├── billing/        │  misma estructura interna
-    ├── marketplace/    │
+    ├── client/         controller, service, dto, mapper, repository, entity
+    ├── legalcase/      controller (casos + agenda), service (caso, bitácora,
+    │                   términos, consecutivo, job), dto, mapper, repository, entity
+    ├── lead/           controller, service, dto, mapper, repository, entity
+    ├── document/       ┐
+    ├── billing/        │  fases siguientes,
+    ├── marketplace/    │  misma estructura interna
     └── notification/   ┘
 ```
 
@@ -229,7 +285,9 @@ src/main/resources/db/migration/
 │                                    practice_area, lawyer, lawyer_practice_area
 ├── V2__seed_practice_area.sql       catálogo de especialidades laborales
 ├── V3__subscription.sql             subscription_plan, subscription
-└── V4__seed_subscription_plan.sql   Freemium / Profesional / Firma
+├── V4__seed_subscription_plan.sql   Freemium / Profesional / Firma
+└── V5__client_case_lead.sql         client, legal_case, case_number_sequence,
+                                     case_event, case_deadline, lead
 ```
 
 Reglas:
@@ -408,7 +466,7 @@ en enlaces.
 
 ---
 
-## 5. Endpoints (Fases 0, 1 y 2)
+## 5. Endpoints (Fases 0 a 3)
 
 **Auth**
 
@@ -446,14 +504,55 @@ en enlaces.
 | POST | `/api/v1/lawyers` | FIRM_OWNER | Invita al abogado y crea su perfil |
 | PATCH | `/api/v1/lawyers/{id}` | FIRM_OWNER, LAWYER | Edición parcial |
 
+**Clientes y expedientes** (todo el equipo de la firma)
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| GET | `/api/v1/clients` | CRM paginado, con casos abiertos por cliente |
+| GET · POST | `/api/v1/clients` · `/{id}` | Detalle y alta |
+| PATCH | `/api/v1/clients/{id}` | Edición parcial (el documento no se edita) |
+| GET | `/api/v1/cases` | Listado con filtros y próximo vencimiento |
+| GET · POST | `/api/v1/cases/{id}` · `/api/v1/cases` | Detalle y apertura (consecutivo automático) |
+| PATCH | `/api/v1/cases/{id}` | Edición parcial |
+| POST | `/api/v1/cases/{id}/close` | Cierre — exige desenlace |
+| POST | `/api/v1/cases/{id}/reopen` | Reapertura (FIRM_OWNER, LAWYER) |
+| GET · POST | `/api/v1/cases/{id}/events` | Bitácora del expediente |
+| GET · POST | `/api/v1/cases/{id}/deadlines` | Términos del expediente |
+| GET | `/api/v1/deadlines/upcoming?withinDays=7` | **Agenda de la firma**: qué vence |
+| POST | `/api/v1/deadlines/{id}/complete` | Marca el término cumplido |
+
+**Pipeline de leads** (todo el equipo de la firma)
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| GET | `/api/v1/leads` | Listado con filtros por etapa, origen y abogado |
+| GET | `/api/v1/leads/pipeline` | Conteo por etapa (tablero) |
+| GET · POST | `/api/v1/leads/{id}` · `/api/v1/leads` | Detalle y alta manual |
+| PATCH | `/api/v1/leads/{id}` | Edición parcial |
+| POST | `/api/v1/leads/{id}/contacted` | Marca contactado |
+| POST | `/api/v1/leads/{id}/convert` | **Crea el cliente** y opcionalmente su primer caso |
+| POST | `/api/v1/leads/{id}/lost` | Marca perdido con motivo |
+
 Errores en formato RFC 7807 (`application/problem+json`).
 
-**Dos reglas que cruzan módulos:**
+**Jobs programados** (`SchedulingConfig`, desactivados en el perfil `test`)
+
+| Cuándo (America/Bogotá) | Qué hace |
+|---|---|
+| 00:30 diario | `DeadlineOverdueJob`: términos vencidos sin cumplir → `MISSED` |
+| 03:00 diario | `TrialExpirationJob`: pruebas vencidas → `PAST_DUE` |
+
+**Reglas que cruzan módulos:**
 
 - Toda alta de miembro (abogado o asistente) pasa por
   `SubscriptionService.ensureCanAddMember(tenantId)` antes de crear nada.
 - Desactivar a un miembro revoca sus refresh tokens en el acto. Sin eso seguiría
   renovando sesión; su access token vigente caduca solo en menos de 30 minutos.
+- Todo cambio relevante de un expediente (apertura, cambio de estado, asignación,
+  término registrado o cumplido, cierre, reapertura) escribe en `case_event`. La
+  bitácora no es opcional: es lo que el cliente verá en su portal en la Fase 4.
+- Convertir un lead crea cliente y, si se pide, su primer expediente **en una sola
+  transacción**. O queda todo, o no queda nada a medias.
 
 ---
 

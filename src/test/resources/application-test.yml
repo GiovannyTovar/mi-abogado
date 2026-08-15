@@ -1,0 +1,12 @@
+# La URL de la BD la inyecta @ServiceConnection desde el contenedor de Testcontainers.
+app:
+  jwt:
+    issuer: mi-abogado-test
+    secret: secreto-de-pruebas-con-mas-de-treinta-y-dos-caracteres
+    access-token-ttl: PT15M
+    refresh-token-ttl: P7D
+  firebase:
+    project-id: test
+    credentials-location: ""   # sin Firebase: los tests de auth mockean el verificador
+  bootstrap:
+    super-admin-email: ""

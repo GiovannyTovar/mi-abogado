@@ -8,14 +8,15 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.UUID;
 
 public interface CaseEventRepository extends JpaRepository<CaseEvent, UUID> {
 
-    /** Bitacora del expediente, de lo mas reciente a lo mas antiguo. */
+    /** Bitacora completa (vista de la firma), de lo mas reciente a lo mas antiguo. */
     @Query(value = """
             select new com.mi.abogado.domain.legalcase.dto.CaseEventResponse(
-                e.id, e.eventType, e.title, e.description, u.fullName, e.occurredAt)
+                e.id, e.eventType, e.title, e.description, u.fullName, e.visibleToClient, e.occurredAt)
             from CaseEvent e
               left join e.createdBy u
             where e.legalCase.id = :caseId
@@ -23,4 +24,15 @@ public interface CaseEventRepository extends JpaRepository<CaseEvent, UUID> {
             """,
             countQuery = "select count(e) from CaseEvent e where e.legalCase.id = :caseId")
     Page<CaseEventResponse> findByCaseId(@Param("caseId") UUID caseId, Pageable pageable);
+
+    /** Linea de tiempo del portal: solo lo que la firma publico. */
+    @Query("""
+            select new com.mi.abogado.domain.legalcase.dto.CaseEventResponse(
+                e.id, e.eventType, e.title, e.description, u.fullName, e.visibleToClient, e.occurredAt)
+            from CaseEvent e
+              left join e.createdBy u
+            where e.legalCase.id = :caseId and e.visibleToClient = true
+            order by e.occurredAt desc
+            """)
+    List<CaseEventResponse> findSharedByCaseId(@Param("caseId") UUID caseId);
 }

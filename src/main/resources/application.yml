@@ -25,6 +25,13 @@ spring:
   jackson:
     default-property-inclusion: non_null
 
+  servlet:
+    multipart:
+      # Nginx corta en 25m; aqui el limite es algo menor para que el error
+      # lo devuelva la aplicacion y no el proxy.
+      max-file-size: 20MB
+      max-request-size: 25MB
+
 server:
   forward-headers-strategy: framework   # respeta X-Forwarded-* de Nginx
 
@@ -44,6 +51,22 @@ app:
     credentials-location: ${FIREBASE_CREDENTIALS:}
   bootstrap:
     super-admin-email: ${SUPER_ADMIN_EMAIL:}
+  storage:
+    # En Docker apunta a un volumen; en local, a una carpeta del proyecto.
+    base-path: ${DOCUMENTS_PATH:./data/documents}
+    # Lista blanca: un despacho sube PDF, imagenes y ofimatica. Sin ella el
+    # almacen se convierte en un vector de distribucion de malware.
+    allowed-content-types:
+      - application/pdf
+      - image/jpeg
+      - image/png
+      - image/webp
+      - image/heic
+      - application/msword
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      - application/vnd.ms-excel
+      - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+      - text/plain
 
 ---
 spring:

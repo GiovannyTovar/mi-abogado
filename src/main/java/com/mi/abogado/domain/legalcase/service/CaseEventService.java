@@ -17,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -35,6 +36,12 @@ public class CaseEventService {
         return caseEventRepository.findByCaseId(caseId, pageable);
     }
 
+    /** Linea de tiempo del portal: solo lo que la firma decidio publicar. */
+    @Transactional(readOnly = true)
+    public List<CaseEventResponse> findSharedByCase(UUID caseId) {
+        return caseEventRepository.findSharedByCaseId(caseId);
+    }
+
     @Transactional
     public void addManualEvent(UUID caseId, CreateCaseEventRequest request) {
         LegalCase legalCase = legalCaseRepository.findById(caseId)
@@ -42,16 +49,30 @@ public class CaseEventService {
 
         caseEventRepository.save(new CaseEvent(
                 legalCase, currentUser(), request.eventType(),
-                request.title(), request.description(), request.occurredAt()));
+                request.title(), request.description(), request.occurredAt(),
+                Boolean.TRUE.equals(request.visibleToClient())));
+    }
+
+    /**
+     * Publica o retira del portal una entrada ya registrada.
+     */
+    @Transactional
+    public void changeVisibility(UUID eventId, boolean visibleToClient) {
+        caseEventRepository.findById(eventId)
+                .orElseThrow(() -> BusinessException.notFound("Actuacion"))
+                .changeVisibility(visibleToClient);
     }
 
     /**
      * Registro automatico desde otros servicios (apertura, cambio de estado,
      * cierre). No valida nada: quien llama ya tiene el expediente en la mano.
+     * <p>
+     * Nace interno. Lo que el cliente ve lo decide la firma, no un efecto colateral.
      */
     @Transactional
     public void record(LegalCase legalCase, CaseEventType eventType, String title, String description) {
-        caseEventRepository.save(new CaseEvent(legalCase, currentUser(), eventType, title, description, null));
+        caseEventRepository.save(
+                new CaseEvent(legalCase, currentUser(), eventType, title, description, null, false));
     }
 
     /**

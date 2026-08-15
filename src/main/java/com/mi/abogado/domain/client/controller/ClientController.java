@@ -6,6 +6,7 @@ import com.mi.abogado.domain.client.dto.CreateClientRequest;
 import com.mi.abogado.domain.client.dto.UpdateClientRequest;
 import com.mi.abogado.domain.client.entity.ClientStatus;
 import com.mi.abogado.domain.client.service.ClientService;
+import com.mi.abogado.domain.user.dto.UserResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -14,6 +15,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -59,5 +61,19 @@ public class ClientController {
     @PatchMapping("/{id}")
     public ClientResponse update(@PathVariable UUID id, @Valid @RequestBody UpdateClientRequest request) {
         return clientService.update(id, request);
+    }
+
+    /** Invita al cliente al portal: se crea su usuario y entra con Google. */
+    @PostMapping("/{id}/portal-access")
+    @PreAuthorize("hasAnyRole('FIRM_OWNER', 'LAWYER')")
+    public UserResponse grantPortalAccess(@PathVariable UUID id) {
+        return clientService.grantPortalAccess(id);
+    }
+
+    @DeleteMapping("/{id}/portal-access")
+    @PreAuthorize("hasAnyRole('FIRM_OWNER', 'LAWYER')")
+    public ResponseEntity<Void> revokePortalAccess(@PathVariable UUID id) {
+        clientService.revokePortalAccess(id);
+        return ResponseEntity.noContent().build();
     }
 }

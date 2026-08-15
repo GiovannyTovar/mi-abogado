@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -18,6 +19,9 @@ import java.util.UUID;
 public interface ClientRepository extends JpaRepository<Client, UUID> {
 
     boolean existsByDocumentTypeAndDocumentNumber(DocumentType documentType, String documentNumber);
+
+    /** Resuelve que cliente esta detras del usuario del portal. */
+    Optional<Client> findByUser_Id(UUID userId);
 
     /**
      * Listado del CRM con el conteo de casos abiertos resuelto en la misma

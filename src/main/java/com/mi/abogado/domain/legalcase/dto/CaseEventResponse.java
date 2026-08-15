@@ -11,6 +11,7 @@ public record CaseEventResponse(
         String title,
         String description,
         String createdByName,
+        boolean visibleToClient,
         Instant occurredAt
 ) {
 }

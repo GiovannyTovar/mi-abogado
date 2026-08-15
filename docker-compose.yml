@@ -33,8 +33,11 @@ services:
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
       FIREBASE_CREDENTIALS: file:/run/secrets/firebase-service-account.json
       SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL}
+      DOCUMENTS_PATH: /app/data/documents
     volumes:
       - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+      # Los documentos del expediente sobreviven al redespliegue del contenedor.
+      - documents:/app/data/documents
     networks: [internal]
 
   nginx:
@@ -52,6 +55,7 @@ services:
 
 volumes:
   db-data:
+  documents:
 
 networks:
   internal:

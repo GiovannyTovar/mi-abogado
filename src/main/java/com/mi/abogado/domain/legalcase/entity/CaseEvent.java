@@ -48,15 +48,27 @@ public class CaseEvent extends TenantScopedEntity {
     @Column(name = "occurred_at", nullable = false, updatable = false)
     private Instant occurredAt = Instant.now();
 
+    /**
+     * Lo unico editable de la entrada. Por defecto falso: las notas de estrategia
+     * son internas, y publicar en el portal es una decision consciente de la firma.
+     */
+    @Column(name = "visible_to_client", nullable = false)
+    private boolean visibleToClient;
+
     public CaseEvent(LegalCase legalCase, User createdBy, CaseEventType eventType,
-                     String title, String description, Instant occurredAt) {
+                     String title, String description, Instant occurredAt, boolean visibleToClient) {
         this.legalCase = legalCase;
         this.createdBy = createdBy;
         this.eventType = eventType;
         this.title = title;
         this.description = description;
+        this.visibleToClient = visibleToClient;
         if (occurredAt != null) {
             this.occurredAt = occurredAt;
         }
+    }
+
+    public void changeVisibility(boolean visibleToClient) {
+        this.visibleToClient = visibleToClient;
     }
 }

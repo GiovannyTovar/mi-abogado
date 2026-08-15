@@ -10,3 +10,9 @@ app:
     credentials-location: ""   # sin Firebase: los tests de auth mockean el verificador
   bootstrap:
     super-admin-email: ""
+  storage:
+    base-path: ${java.io.tmpdir}/abogado-test-documents
+    allowed-content-types:
+      - application/pdf
+      - image/png
+      - text/plain

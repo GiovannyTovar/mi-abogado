@@ -163,15 +163,61 @@ trae `openCases` con una subconsulta correlacionada, y el de expedientes trae
 `nextDueDate` igual. Son las columnas que más se miran; resolverlas por fila
 serían N consultas extra en cada pantalla.
 
-### 1.4 Modelo objetivo (fases siguientes — **no** se crean tablas todavía)
+### 1.4 Fase 4 — portal del cliente (migración `V6`)
+
+```
+   app_user ◄──── client.user_id        el cliente entra con rol CLIENT
+   (rol CLIENT)   (uq, nullable)        y su ficha del CRM queda enlazada
+
+   case_event + visible_to_client       lo interno sigue interno;
+                (default FALSE)         publicar es una decisión de la firma
+
+┌──────────────────────┐   ┌────────────────────┐   ┌──────────────────────┐
+│      document        │   │   case_message     │   │     appointment      │
+│──────────────────────│   │────────────────────│   │──────────────────────│
+│ legal_case_id        │   │ legal_case_id      │   │ client_id     (req.) │
+│ storage_key (uq)     │   │ sender_id          │   │ legal_case_id (opc.) │
+│ name, content_type   │   │ body               │   │ lawyer_id            │
+│ size_bytes           │   │ read_at            │   │ mode  PRESENCIAL /   │
+│ visibility INTERNAL /│   │                    │   │   VIRTUAL/TELEFONICA │
+│   SHARED_WITH_CLIENT │   │ un hilo por caso   │   │ starts_at < ends_at  │
+│ source  FIRM/CLIENT  │   │ inmutable salvo    │   │ status SCHEDULED /   │
+│ extracted_text ──► v2│   │   read_at          │   │  CONFIRMED/COMPLETED │
+└──────────────────────┘   └────────────────────┘   │  CANCELLED/NO_SHOW   │
+   binario en disco                                 └──────────────────────┘
+   (volumen del VPS)
+```
+
+**El aislamiento del cliente es un problema distinto al del tenant.** El filtro de
+`@TenantId` separa una firma de otra, pero **no** separa a un cliente de los demás
+clientes de su misma firma. Ese segundo aislamiento hay que escribirlo. Por eso el
+portal es un módulo aparte y no un rol más en los endpoints de la firma:
+
+| Decisión | Por qué |
+|---|---|
+| `/api/v1/portal/**` separado, solo rol `CLIENT` | Una sola puerta de entrada (`ClientPortalService.requireOwnCase`) por la que pasa **toda** operación del portal. Auditar un archivo es factible; auditar `if (esCliente)` repartidos por seis servicios, no. |
+| Ninguna ruta del portal lleva el id del cliente | Sale del token. Lo que no viaja por la URL no se puede manipular. |
+| Un caso ajeno responde **404**, no 403 | Un 403 confirmaría que el caso existe. Con 404 el cliente no puede sondear qué expedientes tiene la firma. |
+| `visibility` por documento y `visible_to_client` por actuación, ambos **falsos por defecto** | El borrador de una estrategia y una nota sobre la solvencia de la contraparte no son para el cliente. Compartir es un acto explícito. |
+| Lo que sube el cliente nace `SHARED_WITH_CLIENT` y no se le puede ocultar | Ocultarle su propio documento no tiene sentido y parecería una manipulación del expediente. |
+| La descarga del portal comprueba **dos** cosas | Que el documento sea de un caso suyo **y** que esté compartido. Solo lo primero dejaría ver documentos internos de su propio caso a quien adivine un id. |
+| `storage_key` se genera con UUID, sin el nombre original | Un nombre como `../../etc/passwd` no puede escapar del directorio, y dos archivos homónimos no se pisan. `DocumentStorage.resolve` comprueba además que la ruta final siga dentro del almacén. |
+| Descarga siempre como `attachment` + `nosniff` | Un HTML o un SVG subido por un cliente se ejecutaría con el dominio de la aplicación si el navegador lo renderizara. |
+| Lista blanca de `content-type` | Sin ella el almacén se convierte en un vector de distribución de malware. |
+| `PortalCaseRepository` en el paquete `portal` | La dependencia apunta en una sola dirección: el portal conoce el expediente, el expediente no conoce el portal. Y mantiene junto todo lo que el cliente puede leer, que es lo que se revisa al auditar. Extiende `Repository`, no `JpaRepository`: desde el portal no se guarda ni se borra. |
+| Choques de agenda rechazados | Una agenda que permite dos citas del mismo abogado a la misma hora no es una agenda. |
+
+**El módulo `document` y la IA de v2:** los binarios solo los toca `DocumentStorage`,
+y `extracted_text` está reservado para cuando entre OCR o un LLM. Hoy siempre es
+`NULL` y **nadie fuera del módulo lo lee**, así que llenarlo más adelante no obliga
+a tocar ningún otro dominio.
+
+### 1.5 Modelo objetivo (fases siguientes — **no** se crean tablas todavía)
 
 Se documenta para que las decisiones de hoy no bloqueen mañana. Cada tabla llega
 en la migración de su fase.
 
 ```
-Fase 4  client.user_id                        enlace del cliente con su acceso al portal
-        appointment >── legal_case            agenda
-        message >── legal_case                mensajería con el cliente
 Fase 5  legal_parameter                       SMLV, auxilio de transporte, por año
 Fase 6  fee_agreement, time_entry, invoice, payment
 Fase 7  notification, notification_template   WhatsApp
@@ -238,8 +284,13 @@ com.mi.abogado
     ├── legalcase/      controller (casos + agenda), service (caso, bitácora,
     │                   términos, consecutivo, job), dto, mapper, repository, entity
     ├── lead/           controller, service, dto, mapper, repository, entity
-    ├── document/       ┐
-    ├── billing/        │  fases siguientes,
+    ├── document/       controller, service (+ DocumentStorage), dto, mapper,
+    │                   repository, entity
+    ├── message/        controller, service, dto, repository, entity
+    ├── appointment/    controller, service, dto, mapper, repository, entity
+    ├── portal/         controller, service, dto, repository  ← sin entidades:
+    │                   es un modelo de lectura sobre los dominios de la firma
+    ├── billing/        ┐  fases siguientes,
     ├── marketplace/    │  misma estructura interna
     └── notification/   ┘
 ```
@@ -286,8 +337,10 @@ src/main/resources/db/migration/
 ├── V2__seed_practice_area.sql       catálogo de especialidades laborales
 ├── V3__subscription.sql             subscription_plan, subscription
 ├── V4__seed_subscription_plan.sql   Freemium / Profesional / Firma
-└── V5__client_case_lead.sql         client, legal_case, case_number_sequence,
-                                     case_event, case_deadline, lead
+├── V5__client_case_lead.sql         client, legal_case, case_number_sequence,
+│                                    case_event, case_deadline, lead
+└── V6__client_portal.sql            client.user_id, case_event.visible_to_client,
+                                     document, case_message, appointment
 ```
 
 Reglas:
@@ -466,7 +519,7 @@ en enlaces.
 
 ---
 
-## 5. Endpoints (Fases 0 a 3)
+## 5. Endpoints (Fases 0 a 4)
 
 **Auth**
 
@@ -533,6 +586,35 @@ en enlaces.
 | POST | `/api/v1/leads/{id}/convert` | **Crea el cliente** y opcionalmente su primer caso |
 | POST | `/api/v1/leads/{id}/lost` | Marca perdido con motivo |
 
+**Documentos, mensajería y agenda** (equipo de la firma)
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| GET · POST | `/api/v1/cases/{id}/documents` | Archivos del caso · subida (multipart) |
+| GET | `/api/v1/documents/{id}/download` | Descarga |
+| PATCH | `/api/v1/documents/{id}/visibility` | Comparte u oculta al cliente |
+| DELETE | `/api/v1/documents/{id}` | Borra (FIRM_OWNER, LAWYER) |
+| PATCH | `/api/v1/cases/{id}/events/{eventId}/visibility` | Publica o retira una actuación |
+| GET · POST | `/api/v1/cases/{id}/messages` | Hilo con el cliente · enviar |
+| POST | `/api/v1/cases/{id}/messages/read` | Marca leído |
+| GET | `/api/v1/appointments?from=&to=` | Agenda en una ventana de fechas |
+| POST · PATCH | `/api/v1/appointments` · `/{id}` | Agendar · reprogramar |
+| POST | `/api/v1/appointments/{id}/confirm` · `/cancel` · `/complete` | Cambios de estado |
+| POST · DELETE | `/api/v1/clients/{id}/portal-access` | Da o revoca acceso al portal |
+
+**Portal del cliente** (solo rol `CLIENT`; el id del cliente sale del token)
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| GET | `/api/v1/portal/cases` | Sus casos, con mensajes sin leer |
+| GET | `/api/v1/portal/cases/{id}` | Estado del caso: línea de tiempo publicada + documentos compartidos |
+| GET · POST | `/api/v1/portal/cases/{id}/documents` | Ver compartidos · subir los suyos |
+| GET | `/api/v1/portal/documents/{id}/download` | Descarga (doble comprobación) |
+| GET · POST | `/api/v1/portal/cases/{id}/messages` | Hilo con su abogado |
+| POST | `/api/v1/portal/cases/{id}/messages/read` | Marca leído |
+| GET | `/api/v1/portal/appointments` | Sus próximas citas |
+| POST | `/api/v1/portal/appointments/{id}/confirm` · `/cancel` | Confirma o cancela |
+
 Errores en formato RFC 7807 (`application/problem+json`).
 
 **Jobs programados** (`SchedulingConfig`, desactivados en el perfil `test`)
@@ -553,6 +635,13 @@ Errores en formato RFC 7807 (`application/problem+json`).
   bitácora no es opcional: es lo que el cliente verá en su portal en la Fase 4.
 - Convertir un lead crea cliente y, si se pide, su primer expediente **en una sola
   transacción**. O queda todo, o no queda nada a medias.
+- Dar acceso al portal crea un `User` con rol `CLIENT`. **No cuenta** para el límite
+  de miembros del plan: son los clientes de la firma, no su plantilla. Revocar el
+  acceso desactiva ese usuario y revoca sus sesiones, sin borrar la ficha ni el
+  historial.
+- Subir o borrar un documento escribe en la bitácora del expediente.
+- El binario se borra **después** de confirmar el borrado en BD: si la BD falla, el
+  archivo sigue ahí. Al revés quedarían registros apuntando a la nada.
 
 ---
 
@@ -581,6 +670,11 @@ docker compose up -d --build
 
 `docker-compose.yml` levanta Postgres (sin puertos publicados: solo accesible
 desde la red interna), la app y Nginx como terminador TLS y proxy inverso.
+
+**Los documentos van en el volumen `documents`** (`/app/data/documents` en el
+contenedor), así que sobreviven al redespliegue. Ese volumen **no está en la copia
+de seguridad de la base de datos**: hay que respaldarlo aparte, o un `docker volume
+rm` se lleva los expedientes.
 
 ### Requisito del entorno
 

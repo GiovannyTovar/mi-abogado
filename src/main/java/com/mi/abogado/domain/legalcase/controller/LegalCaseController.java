@@ -104,6 +104,15 @@ public class LegalCaseController {
         caseEventService.addManualEvent(id, request);
     }
 
+    /** Publica o retira una actuacion del portal del cliente. */
+    @PatchMapping("/{id}/events/{eventId}/visibility")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void changeEventVisibility(@PathVariable UUID id,
+                                      @PathVariable UUID eventId,
+                                      @RequestParam boolean visibleToClient) {
+        caseEventService.changeVisibility(eventId, visibleToClient);
+    }
+
     // --- Terminos ---
 
     @GetMapping("/{id}/deadlines")

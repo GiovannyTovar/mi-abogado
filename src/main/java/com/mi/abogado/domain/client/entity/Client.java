@@ -1,10 +1,14 @@
 package com.mi.abogado.domain.client.entity;
 
+import com.mi.abogado.domain.user.entity.User;
 import com.mi.abogado.shared.persistence.TenantScopedEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -55,6 +59,14 @@ public class Client extends TenantScopedEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private ClientStatus status = ClientStatus.ACTIVE;
+
+    /**
+     * Usuario con el que entra al portal. Null mientras no se le haya dado acceso:
+     * muchos clientes de un despacho nunca lo pediran.
+     */
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User user;
 
     public Client(ClientType clientType, DocumentType documentType, String documentNumber, String name) {
         this.clientType = clientType;

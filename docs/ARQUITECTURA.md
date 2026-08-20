@@ -241,7 +241,7 @@ justifica, y solo cuando llegue la Fase 9.
 Por dominio, no por capa. Un cambio en "abogados" toca un solo directorio.
 
 ```
-com.mi.abogado
+com.miabogado
 ├── AbogadoApplication.java
 │
 ├── shared/                          ← infraestructura transversal, sin reglas de negocio

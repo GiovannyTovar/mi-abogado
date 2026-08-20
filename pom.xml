@@ -8,7 +8,7 @@
 		<version>4.0.7</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
-	<groupId>com.mi</groupId>
+	<groupId>com.miabogado</groupId>
 	<artifactId>abogado</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>abogado</name>

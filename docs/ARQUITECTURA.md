@@ -212,13 +212,72 @@ y `extracted_text` está reservado para cuando entre OCR o un LLM. Hoy siempre e
 `NULL` y **nadie fuera del módulo lo lee**, así que llenarlo más adelante no obliga
 a tocar ningún otro dominio.
 
-### 1.5 Modelo objetivo (fases siguientes — **no** se crean tablas todavía)
+### 1.5 Fase 5 — parámetros legales y calculadora de liquidación (migración `V7`)
+
+```
+┌──────────────────────────┐        ┌────────────────────────────┐
+│     legal_parameter      │        │  settlement_calculation    │
+│──────────────────────────│        │────────────────────────────│
+│ year (uq)                │        │ tenant_id     ← @TenantId  │
+│ minimum_wage    SMLMV    │        │ client_id      (null ok)   │
+│ transport_allowance      │        │ legal_case_id  (null ok)   │
+│ uvt                      │        │ created_by                 │
+│ severance_interest_rate  │        │──── entrada ───────────────│
+│ transport_allowance_     │        │ employee_name              │
+│   wage_cap        (2)    │        │ contract_type              │
+│ high_salary_threshold(10)│        │ termination_reason         │
+└──────────────────────────┘        │ monthly_salary             │
+   catálogo global,                 │ variable_average           │
+   NO multi-tenant                  │ start_date, end_date       │
+                                    │ contract_end_date          │
+                                    │ severance_paid_through     │
+                                    │ service_bonus_paid_through │
+                                    │ vacation_days_taken        │
+                                    │──── resultado congelado ───│
+                                    │ parameter_year             │
+                                    │ minimum_wage,              │
+                                    │   transport_allowance      │
+                                    │ severance + interest       │
+                                    │ service_bonus, vacation    │
+                                    │ indemnity, total           │
+                                    └────────────────────────────┘
+```
+
+| Decisión | Por qué |
+|---|---|
+| Las cifras del año en tabla, no en constantes | En diciembre cambian y no puede hacer falta un despliegue. Y una liquidación de 2022 debe seguir calculándose con el SMLMV de 2022: hacen falta todos los años, no solo el vigente. |
+| `legal_parameter` sin `tenant_id` | El salario mínimo no cambia de una firma a otra, y la calculadora pública lo lee **sin sesión**, cuando todavía no hay tenant. Mismo caso que `practice_area`. |
+| Solo `SUPER_ADMIN` los edita | Una firma que pudiera mover el SMLMV podría inflar sus propias liquidaciones. |
+| Si falta el año, se cae al último anterior | El decreto del salario mínimo sale a finales de diciembre; la calculadora no puede quedarse muerta mientras tanto. El año realmente usado viaja en la respuesta (`parameterYear`) para que nadie se fíe a ciegas. |
+| `SettlementCalculator` es una función pura | Entrada + parámetros → resultado. No toca BD ni tenant, así que la calculadora pública y la de la firma dan **la misma cifra**, y se prueba sin Spring, sin Postgres y sin Docker (`SettlementCalculatorTest`, 16 casos). |
+| `settlement_calculation` guarda entrada **y** resultado | Lo que la firma ya le entregó al cliente tiene que seguir diciendo lo mismo aunque mañana se corrija una fórmula o un parámetro. Por eso no hay `PATCH`: se calcula otra vez y se guarda de nuevo. |
+| La calculadora pública no crea leads | Un cálculo anónimo no pertenece a ninguna firma. Asignarlo es cosa del marketplace (Fase 8), que sí sabe a cuál. `LeadSource.CALCULADORA` ya existe esperando ese momento. |
+| Guardar contra un expediente escribe en la bitácora | La cifra que la firma le puso al cliente es un hecho del caso, no un apunte suelto. |
+
+**Lo que implementa el motor** (año comercial de 360 días, todo mes de 30):
+
+| Concepto | Fórmula | Base |
+|---|---|---|
+| Cesantías (art. 249 CST) | base × días / 360 | salario + variable + auxilio |
+| Intereses (art. 99 Ley 50/1990) | cesantías × días × 12% / 360 | — |
+| Prima de servicios (art. 306 CST) | base × días del semestre / 360 | salario + variable + auxilio |
+| Vacaciones (art. 186 CST) | 15 días por año, menos los disfrutados | salario + variable, **sin** auxilio |
+| Indemnización (art. 64 CST) | indefinido: 30+20 días/año (20+15 desde 10 SMLMV); fijo y obra: lo que faltaba, mínimo 15 | salario + variable, **sin** auxilio |
+
+El auxilio de transporte entra a cesantías y prima (art. 7 Ley 1 de 1963) pero no a
+vacaciones ni indemnización: no es salario. Y solo se causa hasta 2 SMLMV.
+
+**Fuera de alcance, a propósito:** salario integral, indemnización moratoria del
+art. 65 CST y aportes a seguridad social. Cada uno depende de hechos que la entrada
+no recoge (fecha de pago, pacto de integralidad); calcularlos a ciegas daría una
+cifra falsa con aspecto de cierta.
+
+### 1.6 Modelo objetivo (fases siguientes — **no** se crean tablas todavía)
 
 Se documenta para que las decisiones de hoy no bloqueen mañana. Cada tabla llega
 en la migración de su fase.
 
 ```
-Fase 5  legal_parameter                       SMLV, auxilio de transporte, por año
 Fase 6  fee_agreement, time_entry, invoice, payment
 Fase 7  notification, notification_template   WhatsApp
 Fase 8  tenant_branding >── tenant            logo/colores del portal white-label
@@ -290,6 +349,10 @@ com.miabogado
     ├── appointment/    controller, service, dto, mapper, repository, entity
     ├── portal/         controller, service, dto, repository  ← sin entidades:
     │                   es un modelo de lectura sobre los dominios de la firma
+    ├── settlement/     controller (de la firma, pública y de parámetros), service
+    │                   (SettlementCalculator puro, SettlementService,
+    │                   LegalParameterService), dto, mapper, repository,
+    │                   entity (SettlementCalculation, LegalParameter)
     ├── billing/        ┐  fases siguientes,
     ├── marketplace/    │  misma estructura interna
     └── notification/   ┘
@@ -339,8 +402,10 @@ src/main/resources/db/migration/
 ├── V4__seed_subscription_plan.sql   Freemium / Profesional / Firma
 ├── V5__client_case_lead.sql         client, legal_case, case_number_sequence,
 │                                    case_event, case_deadline, lead
-└── V6__client_portal.sql            client.user_id, case_event.visible_to_client,
-                                     document, case_message, appointment
+├── V6__client_portal.sql            client.user_id, case_event.visible_to_client,
+│                                    document, case_message, appointment
+└── V7__legal_parameter_settlement   legal_parameter (+ seed 2020-2025),
+                                     settlement_calculation
 ```
 
 Reglas:
@@ -519,7 +584,7 @@ en enlaces.
 
 ---
 
-## 5. Endpoints (Fases 0 a 4)
+## 5. Endpoints (Fases 0 a 5)
 
 **Auth**
 
@@ -615,6 +680,19 @@ en enlaces.
 | GET | `/api/v1/portal/appointments` | Sus próximas citas |
 | POST | `/api/v1/portal/appointments/{id}/confirm` · `/cancel` | Confirma o cancela |
 
+**Calculadora de liquidación**
+
+| Método | Ruta | Acceso | Qué hace |
+|---|---|---|---|
+| POST | `/api/v1/public/calculator/settlement` | público | Liquida sin sesión y sin guardar. Es el gancho de la landing |
+| GET | `/api/v1/public/legal-parameters` | público | SMLMV, auxilio y UVT de cada año cargado |
+| PUT | `/api/v1/legal-parameters` | SUPER_ADMIN | Upsert de los parámetros de un año |
+| GET | `/api/v1/legal-parameters/{year}` | SUPER_ADMIN | Parámetros de ese año exacto |
+| POST | `/api/v1/settlements/preview` | equipo de la firma | Tanteo sin guardar |
+| GET · POST | `/api/v1/settlements` | equipo de la firma | Listado (filtros `clientId`, `caseId`) · calcula y guarda |
+| GET | `/api/v1/settlements/{id}` | equipo de la firma | Detalle: entrada + resultado tal como se guardó |
+| DELETE | `/api/v1/settlements/{id}` | FIRM_OWNER, LAWYER | Borra (no se edita: se calcula de nuevo) |
+
 Errores en formato RFC 7807 (`application/problem+json`).
 
 **Jobs programados** (`SchedulingConfig`, desactivados en el perfil `test`)
@@ -640,6 +718,9 @@ Errores en formato RFC 7807 (`application/problem+json`).
   acceso desactiva ese usuario y revoca sus sesiones, sin borrar la ficha ni el
   historial.
 - Subir o borrar un documento escribe en la bitácora del expediente.
+- Guardar una liquidación contra un expediente escribe en su bitácora. Si además
+  se manda `clientId` y no es el del expediente, se rechaza: mejor un 409 que una
+  liquidación colgada del cliente equivocado.
 - El binario se borra **después** de confirmar el borrado en BD: si la BD falla, el
   archivo sigue ahí. Al revés quedarían registros apuntando a la nada.
 

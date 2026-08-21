@@ -59,6 +59,13 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- Spring Boot 4 saco cada autoconfiguracion a su propio modulo: sin
+		     spring-boot-flyway, flyway-core esta en el classpath pero nadie lo
+		     arranca y el esquema no se crea nunca. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-flyway</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-core</artifactId>
